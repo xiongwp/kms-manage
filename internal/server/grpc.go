@@ -51,6 +51,7 @@ func (s *Server) ListenAndServe(ctx context.Context, port int) error {
 	}
 	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(
 		RecoverInterceptor(s.logger),
+		LoggingInterceptor(s.logger),
 		MetricsInterceptor(),
 		RateLimitInterceptor(s.rps, s.burst),
 		AuthInterceptor(s.auth, s.logger),
