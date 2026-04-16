@@ -1,0 +1,18 @@
+# kms-manage 配置样例
+server:
+  grpc_port: 9290
+
+metrics:
+  addr: ":9390"
+
+keystore:
+  dir: /var/lib/kms-manage/keys
+
+# gRPC Bearer token 鉴权；空数组=不校验（仅限测试）
+auth:
+  tokens:
+    - "changeme-please"
+
+rate_limit:
+  rps: 500
+  burst: 1000

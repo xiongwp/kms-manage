@@ -1,0 +1,21 @@
+# kms-manage 本地栈：一个 gRPC 服务 + 一个挂载的 keystore 卷。
+#
+# 首次运行前在 host 上 bootstrap 一把密钥：
+#   mkdir -p ./keys
+#   docker compose run --rm --entrypoint /usr/local/bin/kmsctl kms init-key /var/lib/kms-manage/keys main
+#
+# 然后起服务：
+#   docker compose up
+services:
+  kms:
+    build: .
+    image: kms-manage:local
+    container_name: kms-manage
+    restart: unless-stopped
+    volumes:
+      - ./keys:/var/lib/kms-manage/keys:ro
+    ports:
+      - "9290:9290" # gRPC
+      - "9390:9390" # metrics + /healthz
+    environment:
+      KMS_LOG_DEV: "false"
