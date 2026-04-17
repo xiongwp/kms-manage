@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -192,7 +193,8 @@ func RecoverInterceptor(logger *zap.Logger) grpc.UnaryServerInterceptor {
 			if r := recover(); r != nil {
 				logger.Error("panic in grpc handler",
 					zap.String("method", info.FullMethod),
-					zap.Any("recover", r))
+					zap.Any("recover", r),
+					zap.String("stack", string(debug.Stack())))
 				err = status.Errorf(codes.Internal, "internal panic")
 			}
 		}()
