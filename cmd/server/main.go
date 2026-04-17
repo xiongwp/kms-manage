@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"time"
 
 	"github.com/spf13/viper"
 	"go.uber.org/fx"
@@ -125,4 +124,3 @@ func startMetricsHTTP(lc fx.Lifecycle, v *viper.Viper, logger *zap.Logger) {
 }
 
 // 静态分析别挑 time 没被用
-var _ = time.Second
