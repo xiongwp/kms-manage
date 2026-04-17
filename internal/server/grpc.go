@@ -86,6 +86,11 @@ func (s *Server) Decrypt(ctx context.Context, req *kmsv1.DecryptRequest) (*kmsv1
 	if req.GetCiphertext() == "" {
 		return nil, status.Error(codes.InvalidArgument, "ciphertext required")
 	}
+	// P2-12: context (AAD) 不能为空 —— 强制调用方声明自己是谁在解密什么字段，
+	// 防止跨服务 secret 窃取（service A 拿到 service B 的密文后用空 context 解密）。
+	if req.GetContext() == "" {
+		return nil, status.Error(codes.InvalidArgument, "context (AAD) required for decrypt — use 'svc:<service>:<field>' format")
+	}
 	out, err := s.svc.Decrypt(ctx, service.DecryptIn{
 		Ciphertext: req.GetCiphertext(),
 		Context:    req.GetContext(),
