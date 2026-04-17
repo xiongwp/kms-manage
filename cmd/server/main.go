@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"os"
 
 	"github.com/spf13/viper"
@@ -34,6 +35,7 @@ func main() {
 func loadConfig() (*viper.Viper, error) {
 	v := viper.New()
 	v.SetEnvPrefix("KMS")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
