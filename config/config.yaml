@@ -8,10 +8,10 @@ metrics:
 keystore:
   dir: /var/lib/kms-manage/keys
 
-# gRPC Bearer token 鉴权；空数组=不校验（仅限测试）
+# gRPC Bearer token 鉴权；空数组=不校验。
+# 生产环境应配置 token 并在 payment-core 的 kms.bearer_token 里填同一个值。
 auth:
-  tokens:
-    - "changeme-please"
+  tokens: []
 
 rate_limit:
   rps: 500
