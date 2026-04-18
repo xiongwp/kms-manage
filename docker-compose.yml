@@ -1,0 +1,28 @@
+# kms-manage 本地栈：一个 gRPC 服务 + 一个挂载的 keystore 卷。
+# 通过 external 网络 `payment-stack` 加入联栈，让兄弟服务用容器 DNS
+# （kms-manage:9290）调到它。
+#
+# 首次运行前在 host 上 bootstrap 一把密钥：
+#   mkdir -p ./keys
+#   docker compose run --rm --entrypoint /usr/local/bin/kmsctl kms init-key /var/lib/kms-manage/keys main
+#
+# 然后起服务：
+#   docker compose up
+networks:
+  default:
+    name: ${SHARED_DB_NETWORK:-payment-stack}
+    external: true
+
+services:
+  kms:
+    build: .
+    image: kms-manage:local
+    container_name: kms-manage
+    restart: unless-stopped
+    volumes:
+      - ./keys:/var/lib/kms-manage/keys:ro
+    ports:
+      - "9290:9290" # gRPC
+      - "9390:9390" # metrics + /healthz
+    environment:
+      KMS_LOG_DEV: "false"
