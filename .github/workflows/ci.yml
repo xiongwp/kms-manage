@@ -1,0 +1,37 @@
+name: ci
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kms-manage
+    steps:
+      - name: Checkout kms-manage
+        uses: actions/checkout@v4
+        with: { path: kms-manage }
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+          cache-dependency-path: kms-manage/go.sum
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - name: Vulnerability scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.59
+          working-directory: kms-manage
+          args: --timeout=5m
