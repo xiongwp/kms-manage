@@ -1,5 +1,5 @@
 # kms-manage 本地栈：一个 gRPC 服务 + 一个挂载的 keystore 卷。
-# 通过 external 网络 `shared-db-net` 加入联栈，让兄弟服务用容器 DNS
+# 通过 external 网络 `payment-stack` 加入联栈，让兄弟服务用容器 DNS
 # （kms-manage:9290）调到它。
 #
 # 首次运行前在 host 上 bootstrap 一把密钥：
@@ -10,7 +10,7 @@
 #   docker compose up
 networks:
   default:
-    name: ${SHARED_DB_NETWORK:-shared-db-net}
+    name: ${SHARED_DB_NETWORK:-payment-stack}
     external: true
 
 services:
