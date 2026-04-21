@@ -4,10 +4,12 @@ package main
 import (
 	"context"
 	"errors"
-	"strings"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
+	"github.com/xiongwp/payment-util/trace"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
@@ -19,6 +21,19 @@ import (
 
 func main() {
 	metrics.Register()
+
+	// OTel 初始化：OTEL_EXPORTER_OTLP_ENDPOINT 空 → no-op；非空 → 走 OTLP gRPC
+	// 推 span 到 collector（Jaeger / Tempo / Grafana Agent）。
+	otelShutdown, otelErr := trace.InitOTel(context.Background(), "kms-manage", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if otelErr != nil {
+		fmt.Fprintln(os.Stderr, "otel init:", otelErr)
+	}
+	defer func() {
+		if otelShutdown != nil {
+			_ = otelShutdown(context.Background())
+		}
+	}()
+
 	app := fx.New(
 		fx.Provide(
 			loadConfig,
@@ -124,5 +139,3 @@ func startMetricsHTTP(lc fx.Lifecycle, v *viper.Viper, logger *zap.Logger) {
 		},
 	})
 }
-
-// 静态分析别挑 time 没被用
