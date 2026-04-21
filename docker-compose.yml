@@ -15,7 +15,10 @@ networks:
 
 services:
   kms:
-    build: .
+    build:
+      # 上下文在父目录，能同时看到 ../payment-util
+      context: ..
+      dockerfile: kms-manage/Dockerfile
     image: kms-manage:local
     container_name: kms-manage
     restart: unless-stopped
