@@ -31,11 +31,13 @@ RUN --mount=type=secret,id=GITHUB_TOKEN,required=false \
     set -eu; \
     TOKEN=""; \
     [ -f /run/secrets/GITHUB_TOKEN ] && TOKEN="$(cat /run/secrets/GITHUB_TOKEN)"; \
-    if [ -n "$TOKEN" ]; then \
-        URL="https://x-access-token:${TOKEN}@github.com/xiongwp/payment-util.git"; \
-    else \
-        URL="https://github.com/xiongwp/payment-util.git"; \
+    if [ -z "$TOKEN" ]; then \
+        echo "ERROR: GITHUB_TOKEN is not set; required to clone private xiongwp/* siblings." >&2; \
+        echo "       Generate a token at https://github.com/settings/tokens (scope: repo)," >&2; \
+        echo "       then run:  GITHUB_TOKEN=ghp_xxx docker compose build" >&2; \
+        exit 1; \
     fi; \
+    URL="https://x-access-token:${TOKEN}@github.com/xiongwp/payment-util.git"; \
     git clone --depth=1 --branch "${PAYMENT_UTIL_REF}" "$URL" /src/payment-util
 
 # 这个仓自己的代码
