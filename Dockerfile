@@ -31,12 +31,24 @@ RUN --mount=type=secret,id=GITHUB_TOKEN,required=false \
     set -eu; \
     TOKEN=""; \
     [ -f /run/secrets/GITHUB_TOKEN ] && TOKEN="$(cat /run/secrets/GITHUB_TOKEN)"; \
-    if [ -n "$TOKEN" ]; then \
-        URL="https://x-access-token:${TOKEN}@github.com/xiongwp/payment-util.git"; \
-    else \
-        URL="https://github.com/xiongwp/payment-util.git"; \
+    if [ -z "$TOKEN" ]; then \
+        echo "ERROR: GITHUB_TOKEN is not set; required to clone private xiongwp/* siblings." >&2; \
+        echo "       Generate a token at https://github.com/settings/tokens (scope: repo)," >&2; \
+        echo "       then run:  GITHUB_TOKEN=ghp_xxx docker compose build" >&2; \
+        exit 1; \
     fi; \
-    git clone --depth=1 --branch "${PAYMENT_UTIL_REF}" "$URL" /src/payment-util
+    auth="x-access-token:${TOKEN}@"; \
+    clone_with_fallback() { \
+        repo=$1; ref=$2; \
+        url="https://${auth}github.com/xiongwp/${repo}.git"; \
+        dest="/src/${repo}"; \
+        if git clone --depth=1 --branch "$ref" "$url" "$dest" 2>/dev/null; then \
+            return 0; \
+        fi; \
+        echo "branch '$ref' not found in $repo; falling back to default branch" >&2; \
+        git clone --depth=1 "$url" "$dest"; \
+    }; \
+    clone_with_fallback payment-util "$PAYMENT_UTIL_REF"
 
 # 这个仓自己的代码
 COPY . /src/kms-manage
