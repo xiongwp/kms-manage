@@ -1,19 +1,38 @@
-# kms-manage 的 go.mod 通过 replace 指到 ../payment-util，
-# 所以 docker build 的上下文必须是"父目录"，能同时看到兄弟仓。
+# kms-manage Dockerfile — 自包含构建
 #
-# 联栈 build（推荐）：
-#   cd <root>
-#   docker build -f kms-manage/Dockerfile -t kms-manage:latest .
+# 以前要求 docker build context 是"父目录"以看到 ../payment-util。
+# 当 outer docker-compose 用 `context: ./kms-manage` 时，sibling COPY 会失败。
 #
-# docker-compose.yml 已经把 build.context 指到 `..`。
+# 现在 Dockerfile 自己 git-clone payment-util 到 /src/payment-util，
+# go.mod 里的 `replace ../payment-util` 依赖的相对路径仍然成立。
+#
+# 私仓 clone 通过 BuildKit secret 传 token：
+#   services.kms.build.secrets:
+#     - GITHUB_TOKEN
+# 然后 GITHUB_TOKEN=ghp_xxx docker compose build；
+# 公仓不带 secret 也行。
+#
+# 默认拉 main；覆盖：--build-arg PAYMENT_UTIL_REF=<branch>
 
 # --- build ---
 FROM golang:1.25-alpine AS build
+RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 
-# 两个兄弟仓一起进构建上下文
-COPY payment-util  ./payment-util
-COPY kms-manage    ./kms-manage
+ARG PAYMENT_UTIL_REF=main
+RUN --mount=type=secret,id=GITHUB_TOKEN,required=false \
+    set -eu; \
+    TOKEN=""; \
+    [ -f /run/secrets/GITHUB_TOKEN ] && TOKEN="$(cat /run/secrets/GITHUB_TOKEN)"; \
+    if [ -n "$TOKEN" ]; then \
+        URL="https://x-access-token:${TOKEN}@github.com/xiongwp/payment-util.git"; \
+    else \
+        URL="https://github.com/xiongwp/payment-util.git"; \
+    fi; \
+    git clone --depth=1 --branch "${PAYMENT_UTIL_REF}" "$URL" /src/payment-util
+
+# 这个仓自己的代码
+COPY . /src/kms-manage
 
 WORKDIR /src/kms-manage
 RUN go mod download
@@ -25,7 +44,7 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=build /out/kms-manage /usr/local/bin/
 COPY --from=build /out/kmsctl     /usr/local/bin/
-# 上下文在父目录，config 相对路径是 kms-manage/config
-COPY kms-manage/config/config.yaml /etc/kms-manage/config.yaml
+# 构建上下文是 kms-manage 自身目录，config 相对路径就是 config/
+COPY config/config.yaml /etc/kms-manage/config.yaml
 EXPOSE 9290 9390
 ENTRYPOINT ["/usr/local/bin/kms-manage"]
