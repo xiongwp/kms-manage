@@ -19,6 +19,13 @@ FROM golang:1.25-alpine AS build
 RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 
+# GOFLAGS=-mod=mod 让 go build 在 go.sum 缺条目时自动补（payment-util 是新
+# 加进来的 replace 依赖，kms-manage 的 go.sum 还没对应 hash；go mod download
+# 只下主 go.mod 的直接依赖，不会自动往 go.sum 写 replaced 模块的传递依赖。
+# -mod=mod 在 build 时按需下载并写回 go.sum）。
+ENV GOFLAGS=-mod=mod
+ENV GOTOOLCHAIN=auto
+
 ARG PAYMENT_UTIL_REF=main
 RUN --mount=type=secret,id=GITHUB_TOKEN,required=false \
     set -eu; \
@@ -35,6 +42,9 @@ RUN --mount=type=secret,id=GITHUB_TOKEN,required=false \
 COPY . /src/kms-manage
 
 WORKDIR /src/kms-manage
+# tidy 一下，把 payment-util 传递进来的新 indirect（OTel 等）写进 go.sum；
+# 比纯 GOFLAGS=-mod=mod 稳妥，因为某些 build 工具链仍会按 go.sum 校验。
+RUN go mod tidy
 RUN go mod download
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/kms-manage ./cmd/server
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/kmsctl ./cmd/kmsctl
