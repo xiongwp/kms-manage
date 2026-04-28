@@ -2,11 +2,14 @@
 package metrics
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/xiongwp/payment-util/healthx"
 	"go.uber.org/zap"
 )
 
@@ -40,13 +43,43 @@ func Register() {
 	})
 }
 
-func StartServer(addr string, logger *zap.Logger) {
+// KeystoreReadiness 注入到 healthx.Readiness 的接口：调用方提供"列出活跃
+// 密钥"的能力。我们不在 metrics 包 import keystore（防循环依赖），而是接受
+// 一个轻量函数。
+type KeystoreReadiness func() (active string, count int, err error)
+
+// StartServer 起一个 HTTP server 暴露 /metrics + /healthz + /readyz。
+//
+// keystore 为 nil 时退到老行为（/readyz 永远 OK，但 logger 打 WARN 提示
+// 生产应配 readiness probe）。
+func StartServer(addr string, logger *zap.Logger, ks KeystoreReadiness) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+	mux.HandleFunc("/healthz", healthx.Liveness)
+
+	probes := []healthx.Probe{}
+	if ks != nil {
+		probes = append(probes, healthx.ProbeFunc{
+			N: "keystore",
+			F: func(_ context.Context) error {
+				active, count, err := ks()
+				if err != nil {
+					return err
+				}
+				if active == "" {
+					return fmt.Errorf("no active key")
+				}
+				if count == 0 {
+					return fmt.Errorf("no keys loaded")
+				}
+				return nil
+			},
+		})
+	} else {
+		logger.Warn("readiness keystore probe not configured; /readyz will always pass")
+	}
+	mux.HandleFunc("/readyz", healthx.Readiness(probes...))
+
 	go func() {
 		logger.Info("metrics http listening", zap.String("addr", addr))
 		if err := http.ListenAndServe(addr, mux); err != nil {
