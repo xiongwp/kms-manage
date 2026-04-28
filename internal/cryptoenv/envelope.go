@@ -15,7 +15,46 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 )
+
+// gcmCache 缓存 AES-GCM AEAD 实例，避免每次 Encrypt / Decrypt 都重建：
+//
+//	aes.NewCipher(key) → cipher.NewGCM(block)
+//
+// AES key schedule + GCM table 预计算一共几十 µs，对 100k+ TPS decrypt
+// 路径不可忽略。AEAD 是无状态的（只读 internal table），跨 goroutine 共享
+// 安全。
+//
+// key 是 map key（string(bytes)）；keystore 几条 master key，规模 << 10 →
+// 不需要 LRU。rotation 后旧 key 仍能命中（ParseEnvelope 还在解析旧密文用），
+// 直到 ResetGCMCache 主动清。
+var gcmCache sync.Map // key string → cipher.AEAD
+
+// gcmFor 返回给定 master key 的 AEAD 实例（命中缓存或新建）。
+func gcmFor(key []byte) (cipher.AEAD, error) {
+	k := string(key)
+	if v, ok := gcmCache.Load(k); ok {
+		return v.(cipher.AEAD), nil
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	// LoadOrStore 而非 Store：并发首调时只保留一个实例。
+	actual, _ := gcmCache.LoadOrStore(k, gcm)
+	return actual.(cipher.AEAD), nil
+}
+
+// ResetGCMCache 清空 AEAD 实例缓存。仅在 master key 集合变化（rotation /
+// 紧急吊销）时调用；普通运行不要调，省掉重建开销。tests 也用。
+func ResetGCMCache() {
+	gcmCache = sync.Map{}
+}
 
 const (
 	Prefix     = "kms:v1"
@@ -51,11 +90,7 @@ func Encrypt(key []byte, keyID, context string, plaintext []byte) (string, error
 	if err := ValidateKey(key); err != nil {
 		return "", err
 	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(block)
+	gcm, err := gcmFor(key)
 	if err != nil {
 		return "", err
 	}
@@ -81,11 +116,7 @@ func Decrypt(keys map[string][]byte, ciphertext, context string) ([]byte, string
 	if !ok {
 		return nil, keyID, fmt.Errorf("cryptoenv: unknown key_id %q", keyID)
 	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, keyID, err
-	}
-	gcm, err := cipher.NewGCM(block)
+	gcm, err := gcmFor(key)
 	if err != nil {
 		return nil, keyID, err
 	}
