@@ -127,14 +127,20 @@ func startGRPC(lc fx.Lifecycle, s *server.Server, v *viper.Viper, logger *zap.Lo
 	})
 }
 
-func startMetricsHTTP(lc fx.Lifecycle, v *viper.Viper, logger *zap.Logger) {
+func startMetricsHTTP(lc fx.Lifecycle, v *viper.Viper, ks *keystore.Store, logger *zap.Logger) {
 	addr := v.GetString("metrics.addr")
 	if addr == "" {
 		addr = ":9390"
 	}
+	// readiness probe: 报告 active key + 总加载 key 数；keystore 不可用时 fail。
+	probe := func() (string, int, error) {
+		active := ks.ActiveKeyID()
+		list := ks.List()
+		return active, len(list), nil
+	}
 	lc.Append(fx.Hook{
 		OnStart: func(_ context.Context) error {
-			metrics.StartServer(addr, logger)
+			metrics.StartServer(addr, logger, probe)
 			return nil
 		},
 	})
