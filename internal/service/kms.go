@@ -2,6 +2,7 @@
 package service
 
 import (
+	"container/list"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -28,8 +29,7 @@ var ErrKeyNotFound = errors.New("kms: key_id not found")
 const decryptCacheTTL = 5 * time.Minute
 
 // decryptCacheMaxEntries 缓存最大条目数。一个业务服务通常只有几十条 yaml 密文字段，
-// 整套生态系统也就几百条；上限 4096 远远够用，超过即触发 random-evict 而非 LRU
-// （省一个 list+map 的复杂度；此规模下随机驱逐造成的命中率损失可忽略）。
+// 整套生态系统也就几百条；上限 4096 远远够用，超过即触发 LRU 驱逐。
 const decryptCacheMaxEntries = 4096
 
 type decryptCacheEntry struct {
@@ -38,17 +38,34 @@ type decryptCacheEntry struct {
 	expires   time.Time
 }
 
+// lruNode 双向链表节点 payload。
+type lruNode struct {
+	key   string
+	entry decryptCacheEntry
+}
+
+// decryptCache 是 KMS 解密结果的 LRU 缓存。
+//
+// 实现：map[key]*list.Element + container/list 双向链表。
+//   - get 命中：把节点移到 front（最近使用）；O(1)
+//   - set：相同 key 覆盖 + 移 front；新 key 时若已满，从 back 驱逐 LRU；O(1)
+//   - evictExpired：周期 gcLoop 扫整链清过期节点；O(N)
+//
+// 为何 Mutex 而非 RWMutex：get 也要 MoveToFront 写链表；用 RLock 不安全。
+// 此规模（≤ 4096 entry，几十-几百 RPS）写锁无瓶颈。
 type decryptCache struct {
-	mu       sync.RWMutex
-	entries  map[string]decryptCacheEntry
+	mu       sync.Mutex
+	index    map[string]*list.Element // key → list node
+	order    *list.List               // front = most recent，back = LRU 候选
 	stopOnce sync.Once
 	stopCh   chan struct{}
 }
 
 func newDecryptCache() *decryptCache {
 	c := &decryptCache{
-		entries: make(map[string]decryptCacheEntry, 64),
-		stopCh:  make(chan struct{}),
+		index:  make(map[string]*list.Element, 64),
+		order:  list.New(),
+		stopCh: make(chan struct{}),
 	}
 	go c.gcLoop()
 	return c
@@ -70,49 +87,72 @@ func (c *decryptCache) gcLoop() {
 func (c *decryptCache) evictExpired() {
 	now := time.Now()
 	c.mu.Lock()
-	for k, v := range c.entries {
-		if now.After(v.expires) {
-			delete(c.entries, k)
+	defer c.mu.Unlock()
+	// 从 back 起扫：连续过期的节点直接 pop（旧节点更可能过期）；遇到未过期
+	// 节点不能 break，因为 expires 不严格按 LRU 顺序排（不同 entry 设置时
+	// TTL 相同但加入时间不同；而 MoveToFront 只反映 access，不反映 set）。
+	for e := c.order.Back(); e != nil; {
+		prev := e.Prev()
+		n := e.Value.(*lruNode)
+		if now.After(n.entry.expires) {
+			c.order.Remove(e)
+			delete(c.index, n.key)
 		}
+		e = prev
 	}
-	c.mu.Unlock()
 }
 
 func (c *decryptCache) Stop() {
 	c.stopOnce.Do(func() { close(c.stopCh) })
 }
 
-// get 命中且未过期返回 entry，否则 ok=false。
-// 即使过期也不在此处删除（gcLoop 周期清理），避免热路径写锁。
+// get 命中且未过期返回 entry，否则 ok=false。命中时把节点移到 front。
 func (c *decryptCache) get(key string) (decryptCacheEntry, bool) {
-	c.mu.RLock()
-	e, ok := c.entries[key]
-	c.mu.RUnlock()
-	if !ok || time.Now().After(e.expires) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.index[key]
+	if !ok {
 		return decryptCacheEntry{}, false
 	}
-	return e, true
+	n := el.Value.(*lruNode)
+	if time.Now().After(n.entry.expires) {
+		// 过期节点遇上即清理；省一次 gcLoop。
+		c.order.Remove(el)
+		delete(c.index, key)
+		return decryptCacheEntry{}, false
+	}
+	c.order.MoveToFront(el)
+	return n.entry, true
 }
 
 func (c *decryptCache) set(key string, e decryptCacheEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.entries) >= decryptCacheMaxEntries {
-		// 简易 random-evict：map iteration 顺序未定义，删一条即可。
-		// 比 LRU 简单且对此规模足够；命中率退化几个百分点不影响主功能。
-		for k := range c.entries {
-			delete(c.entries, k)
-			break
+	if el, ok := c.index[key]; ok {
+		// 已存在 → 覆盖值 + 提到 front
+		n := el.Value.(*lruNode)
+		n.entry = e
+		c.order.MoveToFront(el)
+		return
+	}
+	if c.order.Len() >= decryptCacheMaxEntries {
+		// 满 → 驱逐最久未使用（list back）
+		back := c.order.Back()
+		if back != nil {
+			c.order.Remove(back)
+			delete(c.index, back.Value.(*lruNode).key)
 		}
 	}
-	c.entries[key] = e
+	el := c.order.PushFront(&lruNode{key: key, entry: e})
+	c.index[key] = el
 }
 
 // clear 清空缓存。key rotation / active key change 时调用，
 // 防止旧 active key 下生成的解密结果残留误用。
 func (c *decryptCache) clear() {
 	c.mu.Lock()
-	c.entries = make(map[string]decryptCacheEntry, 64)
+	c.index = make(map[string]*list.Element, 64)
+	c.order = list.New()
 	c.mu.Unlock()
 }
 
