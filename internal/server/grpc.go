@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/xiongwp/payment-util/trace"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -51,6 +52,7 @@ func (s *Server) ListenAndServe(ctx context.Context, port int) error {
 	}
 	srv := grpc.NewServer(grpc.ChainUnaryInterceptor(
 		RecoverInterceptor(s.logger),
+		trace.UnaryServerInterceptor(s.logger), // 从 metadata 取 x-trace-id 注入 ctx/logger
 		LoggingInterceptor(s.logger),
 		MetricsInterceptor(),
 		RateLimitInterceptor(s.rps, s.burst),
@@ -65,7 +67,7 @@ func (s *Server) ListenAndServe(ctx context.Context, port int) error {
 	return srv.Serve(lis)
 }
 
-// ─── RPC handlers ────────────────────────────────────────────────
+// ─── RPC handlers ──────────────────────────────
 
 func (s *Server) Encrypt(ctx context.Context, req *kmsv1.EncryptRequest) (*kmsv1.EncryptResponse, error) {
 	if len(req.GetPlaintext()) == 0 {
@@ -86,8 +88,6 @@ func (s *Server) Decrypt(ctx context.Context, req *kmsv1.DecryptRequest) (*kmsv1
 	if req.GetCiphertext() == "" {
 		return nil, status.Error(codes.InvalidArgument, "ciphertext required")
 	}
-	// P2-12: context (AAD) 不能为空 —— 强制调用方声明自己是谁在解密什么字段，
-	// 防止跨服务 secret 窃取（service A 拿到 service B 的密文后用空 context 解密）。
 	if req.GetContext() == "" {
 		return nil, status.Error(codes.InvalidArgument, "context (AAD) required for decrypt — use 'svc:<service>:<field>' format")
 	}
@@ -145,13 +145,11 @@ func (s *Server) ListKeys(_ context.Context, _ *kmsv1.ListKeysRequest) (*kmsv1.L
 	return out, nil
 }
 
-// ─── helpers ────────────────────────────────────────────────────
+// ─── helpers ────────────────────────────────
 
 func toStatus(err error) error {
 	if err == nil {
 		return nil
 	}
-	// ErrKeyNotFound → NotFound；别的一律 InvalidArgument（密文格式 / AEAD 校验失败都是调用方错）
-	// 真正的内部错很罕见，除了磁盘坏。
 	return status.Error(codes.InvalidArgument, err.Error())
 }
