@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -143,13 +144,27 @@ func intStr(n int) string {
 	return string(buf[i:])
 }
 
+// AuthInterceptor 校验 Bearer token。validTokens 的 key 是合法 token，value 是
+// 标签（如 caller name，仅用于日志/审计；当前实现未读取）。
+//
+// 安全：用 subtle.ConstantTimeCompare 逐 token 比较防 timing attack。原先用
+// map[token]→ok 直接 lookup 看似 O(1) 但 byte 比较行为受 hash 桶 + 长度差异
+// 影响，泄露信息。改为统一 O(N) 全扫，N 是 valid token 个数（典型 < 10）。
+//
+// 不在错误 / 日志里回显 token 长度或前缀。
 func AuthInterceptor(validTokens map[string]string, logger *zap.Logger) grpc.UnaryServerInterceptor {
 	skip := func(method string) bool {
 		return strings.HasPrefix(method, "/grpc.health.") ||
 			strings.HasPrefix(method, "/grpc.reflection.")
 	}
+	// 启动期把 map key 物化成 [][]byte，避免每条请求重新 range map（map iteration
+	// 顺序随机，理论上也算微弱 timing 信号）。
+	expected := make([][]byte, 0, len(validTokens))
+	for k := range validTokens {
+		expected = append(expected, []byte(k))
+	}
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		if len(validTokens) == 0 || skip(info.FullMethod) {
+		if len(expected) == 0 || skip(info.FullMethod) {
 			return handler(ctx, req)
 		}
 		md, _ := metadata.FromIncomingContext(ctx)
@@ -157,9 +172,16 @@ func AuthInterceptor(validTokens map[string]string, logger *zap.Logger) grpc.Una
 		if !strings.HasPrefix(auth, "Bearer ") {
 			return nil, status.Error(codes.Unauthenticated, "missing bearer token")
 		}
-		tok := strings.TrimPrefix(auth, "Bearer ")
-		if _, ok := validTokens[tok]; !ok {
-			logger.Debug("auth rejected", zap.String("method", info.FullMethod))
+		tok := []byte(strings.TrimPrefix(auth, "Bearer "))
+		// OR 累加全扫 → 任一匹配 = match==1。不要 break early，避免泄露"哪个槽位
+		// 命中"的 timing 信号。
+		var match int
+		for _, e := range expected {
+			match |= subtle.ConstantTimeCompare(tok, e)
+		}
+		if match != 1 {
+			// 仅记 method（不带 token / token 长度），方便排查"哪个 caller 配错了"。
+			logger.Warn("auth rejected", zap.String("method", info.FullMethod))
 			return nil, status.Error(codes.Unauthenticated, "invalid token")
 		}
 		return handler(ctx, req)
