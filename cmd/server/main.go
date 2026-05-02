@@ -42,7 +42,7 @@ func main() {
 			newKMSSvc,
 			newServer,
 		),
-		fx.Invoke(startGRPC, startMetricsHTTP),
+		fx.Invoke(startGRPC, startMetricsHTTP, startServiceRegistrar),
 	)
 	app.Run()
 }
