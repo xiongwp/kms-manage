@@ -53,9 +53,9 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -race -count=1 ./...
-      # Lint / 漏洞扫 暂时 non-blocking —— 让首批 PR 能合，问题分批治理。
+      # Lint 仍 non-blocking（cosmetic）；vuln scan 改为硬失败 — CVE 级问题
+      # 不应混进 main。已知 false-positive 可在 govulncheck.yaml 加 ignore 规则。
       - name: Vulnerability scan
-        continue-on-error: true
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...

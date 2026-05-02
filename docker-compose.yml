@@ -12,8 +12,8 @@
 #   mkdir -p ./keys
 #   docker compose run --rm --entrypoint /usr/local/bin/kmsctl kms init-key /var/lib/kms-manage/keys main
 #
-# 然后起服务：
-#   docker compose up
+# 然后起服务（需要 GITHUB_TOKEN 让 Dockerfile clone 私仓 payment-util）：
+#   GITHUB_TOKEN=ghp_xxx docker compose up --build
 networks:
   default:
     name: ${SHARED_DB_NETWORK:-payment-stack}
@@ -27,20 +27,21 @@ services:
       secrets:
         - GITHUB_TOKEN
     image: kms-manage:local
-    container_name: kms-manage
+    # container_name 故意不写：支持 docker compose --scale=N 多副本部署。
+    # 多副本时所有 pod 必须挂同一份 keystore（K8s ReadOnlyMany PV / Vault sidecar），
+    # 否则不同副本解密不出对方加密的密文。
     restart: unless-stopped
     volumes:
       - ./keys:/var/lib/kms-manage/keys:ro
+    # host 端口用 range 支持 scale=2：每个副本依次拿 host 19260 / 19261（gRPC）
+    # 和 19360 / 19361（metrics）。容器内端口仍是 9290 / 9390。
     ports:
-      - "9290:9290" # gRPC
-      - "9390:9390" # metrics + /healthz
+      - "19260-19261:9290"   # gRPC
+      - "19360-19361:9390"   # metrics + /healthz
     environment:
       KMS_LOG_DEV: "false"
 
-# BuildKit secret：从环境变量读取 GITHUB_TOKEN，不写入镜像层。
-# 用法：GITHUB_TOKEN=ghp_xxx docker compose build
-# 若 payment-util 是公仓或本机 git 已登录，可以不设 GITHUB_TOKEN（Dockerfile
-# 内部判断：secret 文件不存在就走无 token clone）。
+# BuildKit secret：Dockerfile 用它从环境变量拿 GITHUB_TOKEN clone payment-util。
 secrets:
   GITHUB_TOKEN:
     environment: GITHUB_TOKEN

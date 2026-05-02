@@ -15,47 +15,42 @@
 # 默认拉 main；覆盖：--build-arg PAYMENT_UTIL_REF=<branch>
 
 # --- build ---
+# 自包含 build：BuildKit secret 拿 GITHUB_TOKEN，自己 git-clone payment-util
+# 到 /src/payment-util，让 go.mod 里的 `replace ../payment-util` 在容器内能命中。
 FROM golang:1.25-alpine AS build
+
 RUN apk add --no-cache git ca-certificates
+
 WORKDIR /src
 
-# GOFLAGS=-mod=mod 让 go build 在 go.sum 缺条目时自动补（payment-util 是新
-# 加进来的 replace 依赖，kms-manage 的 go.sum 还没对应 hash；go mod download
-# 只下主 go.mod 的直接依赖，不会自动往 go.sum 写 replaced 模块的传递依赖。
-# -mod=mod 在 build 时按需下载并写回 go.sum）。
 ENV GOFLAGS=-mod=mod
 ENV GOTOOLCHAIN=auto
 
 ARG PAYMENT_UTIL_REF=main
+ARG CACHEBUST=0
 RUN --mount=type=secret,id=GITHUB_TOKEN,required=false \
     set -eu; \
+    echo "cachebust=$CACHEBUST"; \
     TOKEN=""; \
     [ -f /run/secrets/GITHUB_TOKEN ] && TOKEN="$(cat /run/secrets/GITHUB_TOKEN)"; \
     if [ -z "$TOKEN" ]; then \
-        echo "ERROR: GITHUB_TOKEN is not set; required to clone private xiongwp/* siblings." >&2; \
-        echo "       Generate a token at https://github.com/settings/tokens (scope: repo)," >&2; \
+        echo "ERROR: GITHUB_TOKEN is required to clone xiongwp/payment-util." >&2; \
+        echo "       Generate at https://github.com/settings/tokens (scope: repo)," >&2; \
         echo "       then run:  GITHUB_TOKEN=ghp_xxx docker compose build" >&2; \
         exit 1; \
     fi; \
     auth="x-access-token:${TOKEN}@"; \
-    clone_with_fallback() { \
-        repo=$1; ref=$2; \
-        url="https://${auth}github.com/xiongwp/${repo}.git"; \
-        dest="/src/${repo}"; \
-        if git clone --depth=1 --branch "$ref" "$url" "$dest" 2>/dev/null; then \
-            return 0; \
-        fi; \
-        echo "branch '$ref' not found in $repo; falling back to default branch" >&2; \
-        git clone --depth=1 "$url" "$dest"; \
-    }; \
-    clone_with_fallback payment-util "$PAYMENT_UTIL_REF"
+    url="https://${auth}github.com/xiongwp/payment-util.git"; \
+    if git clone --depth=1 --branch "$PAYMENT_UTIL_REF" "$url" /src/payment-util 2>/dev/null; then \
+        :; \
+    else \
+        echo "branch '$PAYMENT_UTIL_REF' not found in payment-util; falling back to default branch" >&2; \
+        git clone --depth=1 "$url" /src/payment-util; \
+    fi
 
-# 这个仓自己的代码
+# 本仓代码 → /src/kms-manage（与 /src/payment-util 同级，匹配 go.mod 里的 ../payment-util）
 COPY . /src/kms-manage
-
 WORKDIR /src/kms-manage
-# tidy 一下，把 payment-util 传递进来的新 indirect（OTel 等）写进 go.sum；
-# 比纯 GOFLAGS=-mod=mod 稳妥，因为某些 build 工具链仍会按 go.sum 校验。
 RUN go mod tidy
 RUN go mod download
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/kms-manage ./cmd/server
