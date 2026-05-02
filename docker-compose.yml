@@ -2,6 +2,12 @@
 # 通过 external 网络 `payment-stack` 加入联栈，让兄弟服务用容器 DNS
 # （kms-manage:9290）调到它。
 #
+# Dockerfile 自己 git-clone payment-util（需要 GITHUB_TOKEN secret）。
+# 想拉 PR 分支覆盖默认 main，可加：
+#   build:
+#     args:
+#       PAYMENT_UTIL_REF: claude/fix-payment-util-pvFNu
+#
 # 首次运行前在 host 上 bootstrap 一把密钥：
 #   mkdir -p ./keys
 #   docker compose run --rm --entrypoint /usr/local/bin/kmsctl kms init-key /var/lib/kms-manage/keys main
