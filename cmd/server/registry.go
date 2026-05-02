@@ -69,9 +69,14 @@ func startServiceRegistrar(lc fx.Lifecycle, v *viper.Viper, logger *zap.Logger) 
 			return nil
 		},
 		OnStop: func(_ context.Context) error {
+			// 必须先判 nil：OnStart 注册失败时 sr 还是 nil，直接 sr.Close()
+			// 会 nil-deref；之前 else-if 在 Close() 之后判断已经晚了。
+			if sr == nil {
+				return nil
+			}
 			if err := sr.Close(); err != nil {
 				logger.Warn("service deregister failed", zap.Error(err))
-			} else if sr != nil {
+			} else {
 				logger.Info("service deregistered from etcd",
 					zap.String("service", service), zap.String("addr", addr))
 			}
