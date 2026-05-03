@@ -115,3 +115,48 @@ func TestSnapshot_Independent(t *testing.T) {
 		t.Fatal("modifying snapshot must not affect store")
 	}
 }
+
+// 资金安全回归：master key 文件权限 > 0600 时必须启动失败。
+// 之前没检查，攻击者读到宿主机就能拿全平台 master key。
+func TestLoad_RejectsOpenKeyFilePermissions(t *testing.T) {
+	dir := t.TempDir()
+	// 写一个 0644（world-readable）的 key 文件
+	path := filepath.Join(dir, "leaky.key")
+	if err := os.WriteFile(path, []byte(k32hex+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ACTIVE"), []byte("leaky\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile ACTIVE: %v", err)
+	}
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load should fail with 0644 key file (world-readable master key); got nil")
+	}
+	// 错误消息应该提示 chmod 让 SRE 一眼看懂修法
+	if !contains(err.Error(), "0600") {
+		t.Errorf("error should mention 0600 hint, got: %v", err)
+	}
+}
+
+func TestLoad_AcceptsStricterPermissions(t *testing.T) {
+	// 0400 (read-only owner) 比 0600 还严，应该通过
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "k.key"), []byte(k32hex+"\n"), 0o400); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ACTIVE"), []byte("k\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile ACTIVE: %v", err)
+	}
+	if _, err := Load(dir); err != nil {
+		t.Fatalf("0400 should be accepted (stricter than 0600), got: %v", err)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
