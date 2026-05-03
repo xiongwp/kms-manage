@@ -48,6 +48,19 @@ type Store struct {
 
 // Load 从目录加载 keystore。
 func Load(dir string) (*Store, error) {
+	// 资金安全：keystore 目录权限校验。CLAUDE.md 明确要求 master key 文件 0600，
+	// 但之前代码只 os.ReadFile 没 Stat → 误置成 0644 / 0666 启动时不报错，宿主机
+	// 任何 shell 用户能读 master key → 全平台 kms:v1:* ciphertext 全裸。
+	//
+	// 校验规则：
+	//   - 目录本身：不允许 group/other 写入（防 attacker 写新 key 让 ACTIVE 切换）
+	//   - 每个 .key 文件：mode & 0077 == 0（即 group/other 无任何权限）
+	// 启动期硬失败而非 warn，否则就跟没检查一样。
+	if di, err := os.Stat(dir); err == nil {
+		if mode := di.Mode().Perm(); mode&0o022 != 0 {
+			return nil, fmt.Errorf("keystore: dir %s mode %#o is too open (no group/other write); chmod 0700 %s", dir, mode, dir)
+		}
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("keystore: read %s: %w", dir, err)
@@ -63,6 +76,13 @@ func Load(dir string) (*Store, error) {
 		}
 		id := strings.TrimSuffix(e.Name(), ".key")
 		path := filepath.Join(dir, e.Name())
+		// 文件权限校验：mode & 0o077 != 0 → 任意 group/other 位 → 启动失败。
+		// 0600 OK；0400 (read-only owner) 也 OK；0644 / 0660 全部拒。
+		if fi, err := os.Stat(path); err == nil {
+			if mode := fi.Mode().Perm(); mode&0o077 != 0 {
+				return nil, fmt.Errorf("keystore: key file %s mode %#o is too open (must be 0600 or stricter); chmod 0600 %s", path, mode, path)
+			}
+		}
 		raw, err := readKeyFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("keystore: read %s: %w", id, err)
