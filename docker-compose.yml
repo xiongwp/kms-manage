@@ -40,6 +40,8 @@ services:
       - "19360-19361:9390"   # metrics + /healthz
     environment:
       KMS_LOG_DEV: "false"
+      # ── 服务发现（自注册到 etcd 让 payment-core / payment-channel / user-merchant-core 发现）──
+      KMS_REGISTRY_ENDPOINTS: "etcd:2379"
 
 # BuildKit secret：Dockerfile 用它从环境变量拿 GITHUB_TOKEN clone payment-util。
 secrets:
